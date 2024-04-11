@@ -1,5 +1,15 @@
 # 旅游日记后台文档
 
+## 0. 地址
+
+- 旅游日记PC管理端地址:
+
+https://gitee.com/zhanglongfei3333/travel-pc.git
+
+- 旅游日记小程序地址:
+
+https://gitee.com/zhanglongfei3333/travel-app.git
+
 ## 1. 介绍
 旅游日记平台后端开发
 
@@ -7,9 +17,13 @@
 nodejs、MongoDB数据库
 
 
-## 3. 文件说明
+## 3. 安装说明
 
 - npm install
+- 运行：node index.js
+
+文件说明：
+
 - file 文件夹用于放压缩前图片
 - optimized 放的是压缩后的照片
 - videos 放视频
