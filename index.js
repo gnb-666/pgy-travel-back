@@ -250,6 +250,38 @@ app.post('/updateAvatar', async (req, res) => {
   }
 });
 
+// 更新联系方式
+app.post('/updatePhone', async (req, res) => {
+  const { openid, phone } = req.body;
+
+  try {
+    // 在数据库中找到对应的用户并更新他们的phone字段
+    const updatedUser = await User.findOneAndUpdate(
+      { _id: openid }, 
+      { phone: phone }, 
+      { new: true }
+    );
+
+    if (updatedUser) {
+      // 如果找到并成功更新了用户信息，返回成功消息
+      res.status(200).send({ 
+        message: 'Phone updated successfully', 
+        data: updatedUser 
+      });
+    } else {
+      // 如果没有找到对应的用户，返回404错误
+      res.status(404).send({ message: 'User not found' });
+    }
+  } catch (error) {
+    // 如果在更新过程中发生了错误，返回500错误和错误信息
+    console.error(error);
+    res.status(500).send({ 
+      message: 'Error updating phone', 
+      detail: error.message 
+    });
+  }
+});
+
 // 微信小程序中的搜索
 app.get("/searchTravelNotes", async (req, res) => {
   const { title } = req.query;
@@ -374,107 +406,195 @@ app.post('/reviewTravelNote', async (req, res) => {
   }
 });
 
+
 // PC 获取后台游记列表（含搜索）
-app.post("/admin/getTravelNotes", async (req, res) => {
-  const { page, size, search } = req.body; // 接收一个额外的search参数
+app.post("/admin/getTravelNotes", async (req, res) => { 
+  const { page, size, search, status } = req.body; // 新增 status 参数用于选择状态
   const skipAmount = (page - 1) * size;
-  let regexSearch = search
-  let searchQuery = []
+  let regexSearch = search;
+  let searchQuery = [];
   const emumObj = {
-    "待审核": 0,
-    "已通过": 1,
-    "已驳回": 2,
-  }
-  console.log(emumObj[search]);
+      "待审核": 0,
+      "已通过": 1,
+      "已驳回": 2,
+  };
+
   if (emumObj[search] || emumObj[search] === 0) {
-    searchQuery = [{ "state": emumObj[search] }]
+      searchQuery = [{ "state": emumObj[search] }];
   } else {
-    regexSearch = new RegExp(search, 'i'); // 创建正则表达式，'i' 代表不区分大小写
-    searchQuery = [{ "title": regexSearch }, { "userInfo.username": regexSearch }] // 根据游记标题进行模糊搜索
+      regexSearch = new RegExp(search, 'i'); 
+      searchQuery = [{ "title": regexSearch }, { "userInfo.username": regexSearch }];
+  }
+
+  let statusQuery = [];
+  // 修改状态筛选逻辑，直接使用数字状态值
+  if (status !== null && status !== undefined) {
+      statusQuery = [{ "state": status }];
+  }
+
+  let combinedQuery = [];
+  if (searchQuery.length > 0 && statusQuery.length > 0) {
+      combinedQuery = [
+          {
+              $and: [
+                  { $or: searchQuery },
+                  { $or: statusQuery }
+              ]
+          }
+      ];
+  } else if (searchQuery.length > 0) {
+      combinedQuery = searchQuery;
+  } else if (statusQuery.length > 0) {
+      combinedQuery = statusQuery;
   }
 
   try {
-    // 在聚合管道开始处添加一个条件匹配步骤
-    const pipeline = [
-      {
-        $lookup: {
-          from: "users",
-          localField: "openid",
-          foreignField: "_id",
-          as: "userInfo"
-        }
-      },
-      {
-        $unwind: {
-          path: "$userInfo",
-          preserveNullAndEmptyArrays: true
-        }
-      },
-      // 添加搜索条件
-      {
-        $match: {
-          $or: [
-            ...searchQuery
-          ]
-        }
-      },
-      {
-        $sort: { publishTime: -1 }
-      },
-      {
-        $skip: skipAmount
-      },
-      {
-        $limit: size
-      }
-    ];
+      const pipeline = [
+          {
+              $lookup: {
+                  from: "users",
+                  localField: "openid",
+                  foreignField: "_id",
+                  as: "userInfo"
+              }
+          },
+          {
+              $unwind: {
+                  path: "$userInfo",
+                  preserveNullAndEmptyArrays: true
+              }
+          },
+          {
+              $match: {
+                  $or: [
+                      ...combinedQuery
+                  ]
+              }
+          },
+          {
+              $sort: { publishTime: -1 }
+          },
+          {
+              $skip: skipAmount
+          },
+          {
+              $limit: size
+          }
+      ];
 
-    // 执行聚合查询
-    const result = await TravelNote.aggregate(pipeline);
+      const result = await TravelNote.aggregate(pipeline);
 
-    // 单独查询满足条件的文档总数，用于分页逻辑
-    // 注意：这里需要重用匹配条件
-    const total = await TravelNote.aggregate([
-      {
-        $lookup: {
-          from: "users",
-          localField: "openid",
-          foreignField: "_id",
-          as: "userInfo"
-        }
-      },
-      {
-        $unwind: {
-          path: "$userInfo",
-          preserveNullAndEmptyArrays: true
-        }
-      },
-      {
-        $match: {
-          $or: [
-            { "title": regexSearch },
-            { "userInfo.username": regexSearch }
-          ]
-        }
-      },
-      {
-        $count: "total"
-      }
-    ]);
+      const totalPipeline = [
+          {
+              $lookup: {
+                  from: "users",
+                  localField: "openid",
+                  foreignField: "_id",
+                  as: "userInfo"
+              }
+          },
+          {
+              $unwind: {
+                  path: "$userInfo",
+                  preserveNullAndEmptyArrays: true
+              }
+          },
+          {
+              $match: {
+                  $or: [
+                      ...combinedQuery
+                  ]
+              }
+          },
+          {
+              $count: "total"
+          }
+      ];
 
-    // 如果没有匹配的文档，total将是空数组
-    const totalCount = total.length ? total[0].total : 0;
+      const total = await TravelNote.aggregate(totalPipeline);
+      const totalCount = total.length? total[0].total : 0;
 
-    res.send({
-      result,
-      total: totalCount
+      res.send({
+          result,
+          total: totalCount
+      });
+  } catch (error) {
+      console.error("Error getting travel notes with user info:", error);
+      res.status(500).send("Server Error");
+  }
+});
+  // 获取仪表盘统计数据
+app.get("/admin/getDashboardStats", async (req, res) => {
+  try {
+    // 日记总数
+    const totalNotes = await TravelNote.countDocuments({ isDeleted: false });
+    
+    // 用户总数
+    const totalUsers = await User.countDocuments();
+    
+    // 待审核数
+    const pendingNotes = await TravelNote.countDocuments({ 
+      state: 0, 
+      isDeleted: false 
+    });
+    
+    // 已通过数
+    const approvedNotes = await TravelNote.countDocuments({ 
+      state: 1, 
+      isDeleted: false 
+    });
+    
+    // 被拒绝数
+    const rejectedNotes = await TravelNote.countDocuments({ 
+      state: 2, 
+      isDeleted: false 
+    });
+
+    res.status(200).send({
+      totalNotes,
+      totalUsers,
+      pendingNotes,
+      approvedNotes,
+      rejectedNotes
     });
   } catch (error) {
-    console.error("Error getting travel notes with user info:", error);
+    console.error("Error getting dashboard stats:", error);
     res.status(500).send("Server Error");
   }
 });
+// 获取最近发布的日记(管理员用)
+app.get("/admin/getRecentNotes", async (req, res) => {
+  try {
+    // 获取最近10条发布的日记，按发布时间降序排序
+    const recentNotes = await TravelNote.aggregate([
+      {
+        $lookup: {
+          from: "users",
+          localField: "openid",
+          foreignField: "_id",
+          as: "userInfo"
+        }
+      },
+      {
+        $unwind: {
+          path: "$userInfo",
+          preserveNullAndEmptyArrays: true
+        }
+      },
+      {
+        $sort: { publishTime: -1 }  // 按发布时间降序排序
+      },
+      {
+        $limit: 10  // 只获取最近的10条记录
+      }
+    ]);
 
+    res.status(200).send(recentNotes);
+  } catch (error) {
+    console.error("Error getting recent travel notes:", error);
+    res.status(500).send("Server Error");
+  }
+});
 app.listen(3001, () => {
   console.log('server running!');
 })
