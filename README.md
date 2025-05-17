@@ -4,11 +4,11 @@
 
 - 旅游日记PC管理端地址:
 
-https://gitee.com/zhanglongfei3333/travel-pc.git
+https://github.com/gnb-666/pgy-travel-pc.git
 
 - 旅游日记小程序地址:
 
-https://gitee.com/zhanglongfei3333/travel-app.git
+https://github.com/gnb-666/pgy-xcx.git
 
 ## 1. 介绍
 旅游日记平台后端开发
