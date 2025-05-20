@@ -8,12 +8,13 @@ const sharp = require('sharp')
 const mongoose = require('mongoose');
 const { User, Admin, TravelNote } = require("./db");
 const app = express();
+const rateLimit = require('express-rate-limit');
+const { body, validationResult } = require('express-validator');
 
 app.use(cors());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(express.static(__dirname));
-
 
 // 视频上传 前置操作 => 中间件
 const videoStorage = multer.diskStorage({
@@ -39,6 +40,14 @@ const storage = multer.diskStorage({
   }
 })
 const upload = multer({ storage });
+
+// 针对所有接口
+const limiter = rateLimit({
+  windowMs: 60 * 1000, // 1分钟
+  max: 60, // 每分钟最多60次
+  message: '请求过于频繁，请稍后再试'
+});
+app.use(limiter);
 
 // 获取首页的游记数据
 app.get("/getTravelNotes", async (req, res) => {
@@ -108,7 +117,22 @@ app.get("/getTravelNoteDetail", async (req, res) => {
 });
 
 // 发布游记
-app.post("/publishTravelNote", async (req, res) => {
+const writeLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1分钟
+  max: 10, // 每分钟最多10次写入
+  message: '操作过于频繁，请稍后再试'
+});
+app.use('/publishTravelNote', writeLimiter);
+
+app.post("/publishTravelNote", [
+  body('title').isString().isLength({ min: 1, max: 100 }),
+  body('content').isString().isLength({ min: 1, max: 5000 }),
+  // 其他字段校验
+], async (req, res) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({ message: '参数不合法', errors: errors.array() });
+  }
   const { id, title, content, imgList, openid, videoUrl } = req.body;
 
   try {
@@ -210,7 +234,7 @@ app.post("/toLogin", async (req, res) => {
 })
 
 // 注册
-app.post('/register', async (req, res) => {
+app.post('/register', writeLimiter, async (req, res) => {
   const { username, password, date, avatarUrl } = req.body;
   const result = await User.findOne({
     username
@@ -409,7 +433,9 @@ app.post('/reviewTravelNote', async (req, res) => {
 
 // PC 获取后台游记列表（含搜索）
 app.post("/admin/getTravelNotes", async (req, res) => { 
-  const { page, size, search, status } = req.body; // 新增 status 参数用于选择状态
+  let { page, size, search, status } = req.body;
+  page = Math.max(Number(page) || 1, 1);
+  size = Math.min(Math.max(Number(size) || 10, 1), 50); // 每页最多50条
   const skipAmount = (page - 1) * size;
   let regexSearch = search;
   let searchQuery = [];
@@ -595,6 +621,105 @@ app.get("/admin/getRecentNotes", async (req, res) => {
     res.status(500).send("Server Error");
   }
 });
+
+// 文本美化接口
+app.post("/beautifyText", async (req, res) => {
+  const { text } = req.body;
+  
+  if (!text) {
+    return res.status(400).json({
+      success: false,
+      message: '文本内容不能为空'
+    });
+  }
+
+  try {
+    console.log('开始调用讯飞星火API，文本长度:', text.length);
+    
+    const response = await axios({
+      url: 'https://spark-api-open.xf-yun.com/v1/chat/completions',
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer aEQiuImWkdmgOxqOcFai:JiyUNSHwLlEjaIlrAyOe`
+      },
+      data: {
+        model: "generalv3.5",
+        messages: [
+          {
+            role: "system",
+            content: "你是一个专业的文本美化助手，擅长将普通文本改写得更加优美流畅。"
+          },
+          {
+            role: "user",
+            content: `请帮我美化以下文本，使其更加优美流畅：${text}`
+          }
+        ],
+        temperature: 0.5,
+        top_k: 4,
+        stream: false,
+        max_tokens: 2048,
+        presence_penalty: 1,
+        frequency_penalty: 1
+      },
+      timeout: 30000 // 设置30秒超时
+    });
+
+    console.log('API响应状态:', response.status);
+    console.log('API响应数据:', JSON.stringify(response.data, null, 2));
+
+    if (response.data && response.data.choices && response.data.choices[0]) {
+      const beautifiedText = response.data.choices[0].message.content;
+      console.log('美化后的文本长度:', beautifiedText.length);
+      
+      res.setHeader('Content-Type', 'application/json');
+      res.status(200).json({
+        success: true,
+        beautifiedText: beautifiedText
+      });
+    } else {
+      console.error('API返回数据格式不正确:', response.data);
+      res.status(400).json({
+        success: false,
+        message: '美化失败：返回数据格式不正确'
+      });
+    }
+  } catch (error) {
+    console.error('文本美化失败，详细错误信息:', error);
+    
+    res.setHeader('Content-Type', 'application/json');
+    
+    if (error.response) {
+      console.error('API错误响应状态:', error.response.status);
+      console.error('API错误响应数据:', error.response.data);
+      
+      res.status(500).json({
+        success: false,
+        message: `API错误: ${error.response.status} - ${error.response.data?.message || '未知错误'}`
+      });
+    } else if (error.request) {
+      console.error('请求发送失败:', error.request);
+      res.status(500).json({
+        success: false,
+        message: '无法连接到讯飞API服务器'
+      });
+    } else {
+      console.error('其他错误:', error.message);
+      res.status(500).json({
+        success: false,
+        message: `服务器错误: ${error.message}`
+      });
+    }
+  } finally {
+    if (!res.headersSent) {
+      res.status(500).json({
+        success: false,
+        message: '服务器内部错误'
+      });
+    }
+  }
+});
+
 app.listen(3001, () => {
   console.log('server running!');
 })
